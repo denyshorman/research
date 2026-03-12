@@ -1,8 +1,11 @@
 package keccak.util
 
 import keccak.*
+import keccak.diophantine.BinaryDiophantineEquation
 import java.io.File
+import java.math.BigInteger
 import java.util.*
+import kotlin.math.ceil
 import kotlin.math.min
 import kotlin.random.Random
 
@@ -423,4 +426,124 @@ fun AndEquationSystem.toSumXor(): XorEquationSystem {
     }
 
     return xorSystem
+}
+
+fun AndEquationSystem.toDiophantineEquation(): BinaryDiophantineEquation {
+    val xorTermsCapacity = ceil(4 * rows / 0.75).toInt()
+    val xorTerms = LinkedHashSet<BitSet>(xorTermsCapacity)
+    val xorTermIsNegative = HashMap<BitSet, Boolean>(xorTermsCapacity)
+    val xorTermOccurrences = HashMap<BitSet, ULong>(xorTermsCapacity)
+    var rhs = BigInteger.valueOf(rows.toLong())
+
+    fun appendXorTerm(termVars: BitSet, termConst: Boolean) {
+        if (termVars.isEmpty) {
+            if (termConst) {
+                rhs--
+            }
+
+            return
+        }
+
+        val isNewTerm = xorTerms.add(termVars)
+
+        if (isNewTerm) {
+            xorTermIsNegative[termVars] = termConst
+            xorTermOccurrences[termVars] = 1u
+        } else {
+            val existingSign = xorTermIsNegative.getValue(termVars)
+
+            if (existingSign xor termConst) {
+                val newCount = xorTermOccurrences.getValue(termVars) - 1u
+
+                if (newCount == 0uL) {
+                    xorTerms.remove(termVars)
+                    xorTermIsNegative.remove(termVars)
+                    xorTermOccurrences.remove(termVars)
+                } else {
+                    xorTermOccurrences[termVars] = newCount
+                }
+
+                rhs--
+            } else {
+                xorTermOccurrences[termVars] = xorTermOccurrences.getValue(termVars) + 1u
+            }
+        }
+    }
+
+    repeat(rows) { eqIndex ->
+        // For each equation: a*b = c
+        // We create: (c) ++ (a+c) ++ (b+c) ++ (a+b+c+1) = 1
+        val eq = equations[eqIndex]
+        val leftBit = andOpLeftResults[eqIndex]
+        val rightBit = andOpRightResults[eqIndex]
+        val resultBit = rightXorResults[eqIndex]
+
+        // c
+        appendXorTerm(eq.rightXor.clone() as BitSet, resultBit)
+
+        // a+c
+        val leftXorResult = (eq.andOpLeft.clone() as BitSet).apply { xor(eq.rightXor) }
+        appendXorTerm(leftXorResult, leftBit xor resultBit)
+
+        // b+c
+        val rightXorResult = (eq.andOpRight.clone() as BitSet).apply { xor(eq.rightXor) }
+        appendXorTerm(rightXorResult, rightBit xor resultBit)
+
+        // a+b+c+1
+        val allThreeXored = (eq.andOpLeft.clone() as BitSet).apply {
+            xor(eq.andOpRight)
+            xor(eq.rightXor)
+        }
+        appendXorTerm(allThreeXored, leftBit xor rightBit xor resultBit xor true)
+    }
+
+    var nextAuxVarIndex = cols.toULong()
+    val xorTermToAuxVar = HashMap<BitSet, ULong>(ceil(xorTerms.size / 0.75).toInt())
+    val coefficients = HashMap<ULong, BigInteger>(ceil((cols + 3 * xorTerms.size) / 0.75).toInt())
+    var separationMultiplier = BigInteger.ONE
+
+    xorTerms.forEach { term ->
+        val termVarCount = term.setBitsCount()
+
+        if (termVarCount > 1) {
+            var bitIndex = term.nextSetBit(0)
+            while (bitIndex >= 0 && bitIndex != Integer.MAX_VALUE) {
+                coefficients.merge(bitIndex.toULong(), separationMultiplier, BigInteger::add)
+                bitIndex = term.nextSetBit(bitIndex + 1)
+            }
+
+            xorTermToAuxVar[term] = nextAuxVarIndex
+
+            var binaryWeight = BigInteger.ONE
+            val binaryBitsNeeded = 32 - Integer.numberOfLeadingZeros(termVarCount) // or floor(log2(x)) + 1
+
+            repeat(binaryBitsNeeded) {
+                coefficients[nextAuxVarIndex++] = (separationMultiplier * binaryWeight).negate()
+                binaryWeight = binaryWeight.shiftLeft(1)
+            }
+
+            separationMultiplier *= binaryWeight
+        }
+    }
+
+    xorTerms.forEach { term ->
+        val representativeVar = xorTermToAuxVar[term] ?: term.nextSetBit(0).toULong()
+        val isNegative = xorTermIsNegative.getValue(term)
+        val occurrenceCount = xorTermOccurrences.getValue(term).toBigInteger()
+        val termCoefficient = occurrenceCount * separationMultiplier
+
+        if (isNegative) {
+            coefficients.merge(representativeVar, -termCoefficient, BigInteger::add)
+            rhs -= occurrenceCount
+        } else {
+            coefficients.merge(representativeVar, termCoefficient, BigInteger::add)
+        }
+    }
+
+    rhs *= separationMultiplier
+
+    return BinaryDiophantineEquation(
+        coefficients = Array(nextAuxVarIndex.toInt()) { coefficients.getOrDefault(it.toULong(), BigInteger.ZERO) },
+        rhs
+    )
 }

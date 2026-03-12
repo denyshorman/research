@@ -103,6 +103,10 @@ fun BooleanArray.toBitSet(): BitSet {
     return bitSet
 }
 
+fun Iterable<BooleanArray>.toBitString(): String {
+    return joinToString(prefix = "[", postfix = "]") { it.toBitString() }
+}
+
 operator fun Boolean.plus(other: Boolean) = this xor other
 
 operator fun Boolean.times(other: Boolean) = this && other

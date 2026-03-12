@@ -1,6 +1,7 @@
 package keccak.util
 
 import keccak.*
+import java.math.BigInteger
 import java.util.*
 
 fun Long.getBit(bitIndex: Int): Boolean {
@@ -70,6 +71,16 @@ fun Long.toNodeGroup(): NodeGroup {
     }
 
     return NodeGroup(bits)
+}
+
+fun ULong.toBigInteger(): BigInteger {
+    val low = toLong()
+
+    return if (low >= 0) {
+        BigInteger.valueOf(low)
+    } else {
+        BigInteger.valueOf(low and Long.MAX_VALUE).setBit(63)
+    }
 }
 
 fun LongArray.toBitSet(): BitSet {
